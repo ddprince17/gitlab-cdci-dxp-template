@@ -1,6 +1,6 @@
-## Optimizely DXP CI/CD
+## GitLab Optimizely DXP CI/CD
 
-You will find CI/CD pipeline scripts that I used for my own Optimizely blog. Hopefully this will help a lot of people to fast track their automation needs with DXP. 
+You will find GitLab CI/CD pipeline scripts that I used for my own Optimizely blog. Hopefully this will help a lot of people to fast track their automation needs with DXP. 
 
 ## Requirements
 * You absolutely need to be an administrator of your GitLab instance.
