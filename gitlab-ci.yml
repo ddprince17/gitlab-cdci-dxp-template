@@ -1,0 +1,133 @@
+default:
+  interruptible: true
+  artifacts:
+    expire_in: "1 hour"
+
+workflow:
+  rules:
+     - if: $CI_COMMIT_TAG
+       when: never
+     - when: always
+
+variables:
+  NUPKG_LOCATION: /tmp/packages
+  ARTIFACTS_LOCATION: $CI_PROJECT_DIR/out
+
+stages:
+  - build
+  - deploy
+  - send-package
+  - deploy-integration
+  - deploy-preproduction
+  - deploy-production
+  - release
+
+include:
+  - component: $CI_SERVER_FQDN/$CI_PROJECT_PATH/optimizely-deployment@$CI_COMMIT_SHA
+    rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: never
+    - when: always
+    inputs:
+      environment: integration
+      direct-deploy: true
+  - component: $CI_SERVER_FQDN/$CI_PROJECT_PATH/optimizely-deployment@$CI_COMMIT_SHA
+    rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: never
+    - when: always
+    inputs:
+      environment: preproduction
+      required-jobs: 
+        - send-package-dxp
+        - deploy-dxp-integration
+  - component: $CI_SERVER_FQDN/$CI_PROJECT_PATH/optimizely-deployment@$CI_COMMIT_SHA
+    rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: never
+    - when: always
+    inputs:
+      environment: production
+      required-jobs: 
+        - send-package-dxp
+        - deploy-dxp-integration
+
+build-frontend-job:
+  stage: build
+  image: node:lts
+  artifacts:
+    untracked: true
+    exclude:
+      - "$CI_PROJECT_DIR/**/node_modules/**/*"
+  script:
+    - cd $CI_PROJECT_DIR/src/<ProjectDirectory>/Frontend
+    - npm ci
+    - npm run build
+
+build-backend-job: 
+  stage: build
+  image: mcr.microsoft.com/dotnet/sdk:latest
+  variables:
+    GIT_DEPTH: 0
+    GIT_CLEAN_FLAGS: none
+  artifacts:
+    paths:
+      - $ARTIFACTS_LOCATION/**/*.nupkg
+    reports:
+      dotenv: gitversion.properties
+  needs:
+    - build-frontend-job
+  script: 
+    - dotnet tool install GitVersion.Tool -g
+    - "export PATH=\"$PATH:/root/.dotnet/tools\""
+    - dotnet-gitversion /output buildserver
+    - dotnet restore --locked-mode --packages $NUPKG_LOCATION
+    - cd $CI_PROJECT_DIR/src/<ProjectDirectory>
+    - dotnet publish -c Release -r linux-x64 --no-restore --packages $NUPKG_LOCATION -o $ARTIFACTS_LOCATION
+    - <Commands to package your application to a NuGet package>
+
+send-package-dxp:
+  stage: send-package
+  image: mcr.microsoft.com/powershell:lts
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: never
+    - when: on_success
+  variables:
+    GIT_CLEAN_FLAGS: none
+  artifacts:
+    reports:
+      dotenv: deploy.env
+  tags:
+    - pwsh
+  needs:
+    - build-backend-job
+  script:
+    - Install-Module -Name EpiCloud -Force
+    - Connect-EpiCloud -ClientKey $DXP_CLIENT_KEY -ClientSecret $DXP_CLIENT_SECRET -ProjectId $DXP_PROJECT_ID
+    - $packageLocation = Get-EpiDeploymentPackageLocation
+    - $foundPackageLocations = Get-ChildItem -Path $ARTIFACTS_LOCATION -Filter "*.nupkg" | Sort-Object -Property Name -Descending
+    - $resolvedPackagePath = $foundPackageLocations | Select-Object -First 1
+    - "Write-Host \"The CI/CD pipeline downloaded the following artifacts: $foundPackageLocations\""
+    - "Write-Host \"The following package will be deployed: $resolvedPackagePath\""
+    - Add-EpiDeploymentPackage -SasUrl $packageLocation -Path $resolvedPackagePath.FullName
+    - "\"PACKAGE_NAME=$($resolvedPackagePath.Name)\" > deploy.env"
+
+release_job:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: never
+    - when: on_success
+  needs:
+    - build-backend-job
+    - send-package-dxp
+    - job: complete-deploy-dxp-production
+      optional: true
+  script:
+    - echo "Running the release job."
+  release:
+    tag_name: $GitVersion_MajorMinorPatch
+    tag_message: 'Release $GitVersion_MajorMinorPatch'
+    description: 'Release $GitVersion_MajorMinorPatch created using the release-cli.'

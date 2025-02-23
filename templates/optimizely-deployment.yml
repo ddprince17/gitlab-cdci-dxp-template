@@ -1,0 +1,94 @@
+spec:
+  inputs:
+    environment:
+      type: string
+      description: "Environment on which this script will run."
+    direct-deploy:
+      type: boolean
+      default: false
+      description: "Whether the current deployment is using directy deploy."
+    required-jobs:
+      type: array
+      description: "List of jobs that are required to run these jobs."
+      default:
+        - send-package-dxp
+
+---
+
+.my-component:direct-deploy:false:
+  artifacts:
+    reports:
+      dotenv: deploy.env
+  script:
+    - Install-Module -Name EpiCloud -Force
+    - Connect-EpiCloud -ClientKey $DXP_CLIENT_KEY -ClientSecret $DXP_CLIENT_SECRET -ProjectId $DXP_PROJECT_ID
+    - $deploymentData = Start-EpiDeployment -DeploymentPackage $PACKAGE_NAME -TargetEnvironment $CI_ENVIRONMENT_NAME -Wait -ShowProgress
+    - "\"deployment_id=$($deploymentData.id)\" > deploy.env"
+
+.my-component:direct-deploy:true:
+  script:
+    - Install-Module -Name EpiCloud -Force
+    - Connect-EpiCloud -ClientKey $DXP_CLIENT_KEY -ClientSecret $DXP_CLIENT_SECRET -ProjectId $DXP_PROJECT_ID
+    - $deploymentData = Start-EpiDeployment -DeploymentPackage $PACKAGE_NAME -TargetEnvironment $CI_ENVIRONMENT_NAME -DirectDeploy -Wait -ShowProgress
+
+"deploy-dxp-$[[ inputs.environment ]]":
+  extends: 
+    - '.my-component:direct-deploy:$[[ inputs.direct-deploy ]]'
+  stage: 'deploy-$[[ inputs.environment ]]'
+  image: mcr.microsoft.com/powershell:lts
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: '"$[[ inputs.environment ]]" == "production"'
+      when: manual
+    - when: on_success
+  tags:
+    - pwsh
+  environment:
+    name: "$[[ inputs.environment ]]"
+  needs: 
+    - $[[ inputs.required-jobs ]]
+
+"complete-deploy-dxp-$[[ inputs.environment ]]":
+  stage: 'deploy-$[[ inputs.environment ]]'
+  image: mcr.microsoft.com/powershell:lts
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+    - if: '"$[[ inputs.direct-deploy ]]" == "true"'
+      when: never
+    - when: manual
+  tags:
+    - pwsh
+  environment:
+    name: "$[[ inputs.environment ]]"
+  needs:
+    - $[[ inputs.required-jobs ]]
+    - "deploy-dxp-$[[ inputs.environment ]]"
+  script:
+    - Install-Module -Name EpiCloud -Force
+    - Connect-EpiCloud -ClientKey $DXP_CLIENT_KEY -ClientSecret $DXP_CLIENT_SECRET -ProjectId $DXP_PROJECT_ID
+    - "Complete-EpiDeployment -Id $deployment_id -Wait -ShowProgress"
+
+"reset-deploy-dxp-$[[ inputs.environment ]]":
+  stage: 'deploy-$[[ inputs.environment ]]'
+  image: mcr.microsoft.com/powershell:lts
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+    - if: '"$[[ inputs.direct-deploy ]]" == "true"'
+      when: never
+    - when: manual
+  tags:
+    - pwsh
+  environment:
+    name: "$[[ inputs.environment ]]"
+  needs:
+    - $[[ inputs.required-jobs ]]
+    - "deploy-dxp-$[[ inputs.environment ]]"
+  script:
+    - Install-Module -Name EpiCloud -Force
+    - Connect-EpiCloud -ClientKey $DXP_CLIENT_KEY -ClientSecret $DXP_CLIENT_SECRET -ProjectId $DXP_PROJECT_ID
+    - "Reset-EpiDeployment -Id $deployment_id -Complete -Wait -ShowProgress"
