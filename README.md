@@ -8,4 +8,4 @@ You will find GitLab CI/CD pipeline scripts that I used for my own Optimizely bl
 * Being able to add an additional one or make adjustement on existing ones.
 
 ## More information
-You can find out more on my blog. This page will be updated once the link of my blog post will be available. 
+You can find out more on my blog: https://www.davidhome.net/blog/optimizely-dxp-gitlab-pipeline/. 
